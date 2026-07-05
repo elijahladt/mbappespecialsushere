@@ -17,3 +17,14 @@ def devig_proportional(decimal_odds_a: float, decimal_odds_b: float):
     raw_a, raw_b = implied_prob(decimal_odds_a), implied_prob(decimal_odds_b)
     overround = raw_a + raw_b
     return raw_a / overround, raw_b / overround
+
+
+def devig_proportional_n(decimal_odds: list):
+    """N-way generalization (e.g. 3-way 1X2 club-league odds) of the same
+    proportional de-vig above -- added for club football, where a genuine
+    1X2 line may exist on some bookmaker/league even though BetMGM's
+    confirmed club-league markets (checked directly) don't include one.
+    Returns fair probabilities in the same order as decimal_odds."""
+    raw = [implied_prob(o) for o in decimal_odds]
+    overround = sum(raw)
+    return [r / overround for r in raw]

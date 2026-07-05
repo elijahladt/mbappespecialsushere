@@ -9,3 +9,4 @@ statsbombpy
 xgboost
 shap
 python-dotenv
+openpyxl

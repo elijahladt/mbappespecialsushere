@@ -74,3 +74,60 @@ def effective_diff(engine, team_a, team_b, host_bonus_by_country: dict = None):
     host_bonus_by_country = host_bonus_by_country or DEFAULT_HOST_BONUS_BY_COUNTRY
     adv = host_bonus_by_country.get(team_a, 0.0) if team_a in HOST_NATIONS and team_b not in HOST_NATIONS else 0.0
     return (engine.get(team_a) + adv) - engine.get(team_b)
+
+
+def ensure_club_db_populated(league_id: str):
+    """Same rationale as ensure_db_populated() above -- club_matches is
+    gitignored/regenerable, a fresh clone has it empty. Checked per league_id
+    so opening one league's page doesn't block on ingesting every league
+    (Milestone 2+ leagues stay untouched until their page is first opened)."""
+    from src.db import get_connection
+    conn = get_connection()
+    count = conn.execute(
+        "SELECT COUNT(*) FROM club_matches WHERE league_id = ?", (league_id,)
+    ).fetchone()[0]
+    conn.close()
+    if count > 0:
+        return
+
+    from src.ingest.football_data_co_uk import fetch_and_load
+    fetch_and_load(league_id)
+
+
+@st.cache_resource(show_spinner="First run for this league: downloading historical results (one-time, then cached)...")
+def load_club_engine_and_model(league_id: str):
+    from src.features.club_elo import run_all as club_run_all
+    from src.models.club_winprob_link import fit_link as club_fit_link
+
+    ensure_club_db_populated(league_id)
+    engine, feature_rows = club_run_all(league_id)
+    model, n_train = club_fit_link(feature_rows, league_id)
+    return engine, model, n_train
+
+
+def ensure_tennis_db_populated(tour: str):
+    """Same rationale as ensure_db_populated()/ensure_club_db_populated()
+    above -- tennis_matches is gitignored/regenerable, checked per tour so
+    opening the ATP page doesn't block on ingesting WTA history too."""
+    from src.db import get_connection
+    conn = get_connection()
+    count = conn.execute(
+        "SELECT COUNT(*) FROM tennis_matches WHERE tour = ?", (tour,)
+    ).fetchone()[0]
+    conn.close()
+    if count > 0:
+        return
+
+    from src.ingest.tennis_data_co_uk import fetch_and_load
+    fetch_and_load(tour)
+
+
+@st.cache_resource(show_spinner="First run for this tour: downloading historical results (one-time, then cached)...")
+def load_tennis_engine_and_model(tour: str):
+    from src.features.tennis_elo import run_all as tennis_run_all
+    from src.models.tennis_winprob_link import fit_link as tennis_fit_link
+
+    ensure_tennis_db_populated(tour)
+    engine, feature_rows = tennis_run_all(tour)
+    model, n_train = tennis_fit_link(feature_rows, tour)
+    return engine, model, n_train
