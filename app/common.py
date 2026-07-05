@@ -7,6 +7,7 @@ from pathlib import Path
 import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from src.db import get_connection
 from src.features.elo import run_all
 from src.features.rest_travel import compute_rest_travel
 from src.features.altitude_timezone import compute_altitude_timezone
@@ -39,8 +40,29 @@ DEFAULT_HOST_BONUS_BY_COUNTRY = {
 }
 
 
-@st.cache_resource(show_spinner="Building Elo ratings from ~50k historical matches...")
+def ensure_db_populated():
+    """data/wc.sqlite is gitignored (it's a ~9MB regeneratable cache, not
+    source) -- a fresh clone (e.g. Streamlit Cloud) has an empty database
+    unless something builds it. Runs the full ingestion pipeline once, only
+    if the matches table is actually empty."""
+    conn = get_connection()
+    count = conn.execute("SELECT COUNT(*) FROM matches").fetchone()[0]
+    conn.close()
+    if count > 0:
+        return
+
+    from src.ingest.historical_results import fetch_and_load as load_historical
+    from src.ingest.wc2026_results import fetch_and_load as load_2026
+    from src.ingest.enrich_backtest_venues import run as enrich_venues
+
+    load_historical()
+    load_2026()
+    enrich_venues()
+
+
+@st.cache_resource(show_spinner="First run: downloading ~50k historical matches + 2026 results (one-time, then cached)...")
 def load_engine_and_model():
+    ensure_db_populated()
     engine, feature_rows = run_all()
     model, n_train = fit_link(feature_rows)
     tracker, _ = compute_rest_travel()
