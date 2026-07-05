@@ -20,6 +20,20 @@ def bootstrap_brier_ci(probs, outcomes, n_boot: int = 2000, seed: int = 42):
     return float(lo), float(hi)
 
 
+def multiclass_brier_score(prob_triples, outcome_labels) -> float:
+    """Multi-class (3-way) Brier score: mean squared error between the
+    predicted probability vector and the one-hot outcome vector, summed
+    across classes per sample. prob_triples entries and outcome_labels use
+    the same (away=0, draw=1, home=2) class ordering as club_winprob_link.
+    Reduces to the standard binary Brier score when there are 2 classes."""
+    probs = np.asarray(prob_triples, dtype=float)
+    n_classes = probs.shape[1]
+    one_hot = np.zeros_like(probs)
+    for i, label in enumerate(outcome_labels):
+        one_hot[i, label] = 1.0
+    return float(np.mean(np.sum((probs - one_hot) ** 2, axis=1)))
+
+
 def reliability_buckets(probs, outcomes, n_buckets: int = 5):
     """Bucket predictions and compare mean predicted prob to realized win rate --
     a calibration sanity check (not just a single scalar score)."""
