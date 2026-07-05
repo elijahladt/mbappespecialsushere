@@ -13,7 +13,7 @@ from pathlib import Path
 import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-from src.config import get_secret
+from src.config import get_secret, debug_secret_visibility
 from src.db import get_connection
 
 BASE_URL = "https://v3.football.api-sports.io"
@@ -52,7 +52,7 @@ def _cached_get(path: str, params: dict, ttl_seconds: int = 86400):
         raise RuntimeError(
             "API_FOOTBALL_KEY not set. Locally: copy .env.example to .env and add your free "
             "key from https://www.api-football.com/. On Streamlit Cloud: add it under App "
-            "settings -> Secrets."
+            "settings -> Secrets. " + debug_secret_visibility("API_FOOTBALL_KEY")
         )
 
     resp = requests.get(

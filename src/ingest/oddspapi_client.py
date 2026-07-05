@@ -16,7 +16,7 @@ from pathlib import Path
 import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-from src.config import get_secret
+from src.config import get_secret, debug_secret_visibility
 from src.ingest.wc2026_results import normalize_team
 
 BASE_URL = "https://api.oddspapi.io"
@@ -29,7 +29,8 @@ def _get(path: str, params: dict):
     if not api_key:
         raise RuntimeError(
             "ODDSPAPI_KEY not set. Locally: copy .env.example to .env and add your key from "
-            "https://oddspapi.io/. On Streamlit Cloud: add it under App settings -> Secrets."
+            "https://oddspapi.io/. On Streamlit Cloud: add it under App settings -> Secrets. "
+            + debug_secret_visibility("ODDSPAPI_KEY")
         )
     resp = requests.get(f"{BASE_URL}{path}", params={**params, "apiKey": api_key}, timeout=30)
     resp.raise_for_status()
