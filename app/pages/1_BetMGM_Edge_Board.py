@@ -23,6 +23,22 @@ from common import load_engine_and_model, effective_diff, DEFAULT_HOST_BONUS_BY_
 
 st.set_page_config(page_title="BetMGM Edge Board", layout="wide")
 
+with st.expander("🔧 Debug: secret detection (safe -- shows key names/lengths only, never values)"):
+    try:
+        secret_names = list(st.secrets.keys())
+    except Exception as e:
+        secret_names = None
+        st.write(f"st.secrets raised: {e!r}")
+    st.write(f"Keys visible in st.secrets: {secret_names}")
+    import os as _os
+    for _name in ("ODDSPAPI_KEY", "API_FOOTBALL_KEY"):
+        in_secrets = secret_names is not None and _name in secret_names
+        env_val = _os.environ.get(_name)
+        st.write(
+            f"{_name}: in st.secrets={in_secrets}, "
+            f"in os.environ={_name in _os.environ} (len={len(env_val) if env_val else 0})"
+        )
+
 
 @st.cache_data(ttl=300, show_spinner="Pulling live BetMGM odds via OddsPapi...")
 def load_betmgm_matches():
