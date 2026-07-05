@@ -1,0 +1,3 @@
+{
+  "_readme": "Edit this file yourself with public injury/squad news you've read (e.g. from press conferences or reputable sports journalism). Add entries like \"Argentina\": [\"Starting striker doubtful with hamstring issue\"]. Key = exact team name as used elsewhere in this project (see the Elo ratings table in the dashboard for correct spelling). Not fed into the model -- displayed as a caution flag only, since impact can't be reliably quantified from unstructured news."
+}

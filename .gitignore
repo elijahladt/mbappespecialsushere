@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.pyc
+data/wc.sqlite
+data/statsbomb/
+data/espn_events/
+data/api_football_cache.sqlite
+.streamlit/
