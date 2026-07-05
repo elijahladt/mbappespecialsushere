@@ -12,11 +12,11 @@ comparison point.
 import sys
 from pathlib import Path
 
-import numpy as np
 from sklearn.linear_model import LogisticRegression
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from src.features.tennis_elo import run_all
+from src.models.tennis_winprob_link import build_training_set, features_for_perspective, EXCLUDED_COMMENTS
 from src.backtest.metrics import brier_score, bootstrap_brier_ci, reliability_buckets
 
 NAIVE_BASELINE_BRIER = 0.25  # constant p=0.5 on a symmetrized 50/50 label set
@@ -30,23 +30,18 @@ def walk_forward(feature_rows, min_train: int = 500):
     for year in years:
         cutoff = f"{year}-01-01"
         train_rows = [r for r in feature_rows if r["date"] < cutoff]
-        test_rows = [r for r in feature_rows if r["date"][:4] == str(year)]
+        test_rows = [r for r in feature_rows if r["date"][:4] == str(year) and r.get("comment") not in EXCLUDED_COMMENTS]
         if len(train_rows) < min_train or not test_rows:
             continue
 
-        X_train, y_train = [], []
-        for r in train_rows:
-            diff = r["winner_elo_pre"] - r["loser_elo_pre"]
-            X_train.append([diff]); y_train.append(1)
-            X_train.append([-diff]); y_train.append(0)
+        X_train, y_train = build_training_set(train_rows)
         model = LogisticRegression()
-        model.fit(np.array(X_train), np.array(y_train))
+        model.fit(X_train, y_train)
 
         year_probs, year_outcomes = [], []
         for r in test_rows:
-            diff = r["winner_elo_pre"] - r["loser_elo_pre"]
-            year_probs.append(model.predict_proba([[diff]])[0, 1]); year_outcomes.append(1)
-            year_probs.append(model.predict_proba([[-diff]])[0, 1]); year_outcomes.append(0)
+            year_probs.append(model.predict_proba([features_for_perspective(r, True)])[0, 1]); year_outcomes.append(1)
+            year_probs.append(model.predict_proba([features_for_perspective(r, False)])[0, 1]); year_outcomes.append(0)
 
         per_year[year] = {
             "n_matches": len(test_rows),

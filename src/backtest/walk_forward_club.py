@@ -18,7 +18,7 @@ from sklearn.linear_model import LogisticRegression
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from src.features.club_elo import run_all
-from src.models.club_winprob_link import build_training_set, effective_elo_diff, outcome_label
+from src.models.club_winprob_link import build_training_set, build_features, outcome_label
 from src.backtest.metrics import multiclass_brier_score, bootstrap_brier_ci
 
 
@@ -56,8 +56,7 @@ def walk_forward(feature_rows, min_train: int = 380):
 
         season_probs, season_outcomes, season_naive = [], [], []
         for r in test_rows:
-            diff = effective_elo_diff(r)
-            raw = model.predict_proba([[diff]])[0]
+            raw = model.predict_proba([build_features(r)])[0]
             p = tuple(raw[classes.index(c)] for c in (0, 1, 2))
             label = outcome_label(r)
             season_probs.append(p)

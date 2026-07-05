@@ -68,12 +68,20 @@ def fetch_season(tour: str, year: int) -> list:
         else:
             continue
 
+        # ATP's column is "Series" (Grand Slam/Masters 1000/ATP500/...),
+        # WTA's equivalent is "Tier" (Grand Slam/WTA1000/WTA500/...) -- same
+        # concept, different header name per tour.
+        series = row.get("Series") or row.get("Tier")
+        best_of = row.get("Best of")
+
         rows.append((
             date,
             tour,
             str(row.get("Tournament") or ""),
             row.get("Surface"),
             row.get("Round"),
+            series,
+            int(best_of) if best_of else None,
             str(winner).strip(),
             str(loser).strip(),
             comment or None,
@@ -101,9 +109,9 @@ def fetch_and_load(tour: str = "atp"):
     conn = get_connection()
     conn.executemany(
         """INSERT OR IGNORE INTO tennis_matches
-           (date, tour, tournament, surface, round, winner, loser, comment, source,
+           (date, tour, tournament, surface, round, series, best_of, winner, loser, comment, source,
             b365_winner, b365_loser, pinnacle_winner, pinnacle_loser)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         all_rows,
     )
     conn.commit()

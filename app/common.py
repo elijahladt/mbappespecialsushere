@@ -11,7 +11,7 @@ from src.db import get_connection
 from src.features.elo import run_all
 from src.features.rest_travel import compute_rest_travel
 from src.features.altitude_timezone import compute_altitude_timezone
-from src.models.winprob_link import fit_link
+from src.models.winprob_link import fit_link, h2h_diff_live
 
 HOST_NATIONS = {"United States", "Mexico", "Canada"}
 
@@ -74,6 +74,19 @@ def effective_diff(engine, team_a, team_b, host_bonus_by_country: dict = None):
     host_bonus_by_country = host_bonus_by_country or DEFAULT_HOST_BONUS_BY_COUNTRY
     adv = host_bonus_by_country.get(team_a, 0.0) if team_a in HOST_NATIONS and team_b not in HOST_NATIONS else 0.0
     return (engine.get(team_a) + adv) - engine.get(team_b)
+
+
+def full_feature_vector(engine, team_a, team_b, host_bonus_by_country: dict = None):
+    """[elo_diff (with host-nation bonus), h2h_diff] -- the model now takes
+    both. NOTE on confidence: walk-forward backtest on the tiny WC knockout
+    sample (n=49 held-out matches across 2010-2022) found h2h_diff's effect
+    is within noise (Brier 0.1648 with it vs. 0.1591 without -- confidence
+    intervals almost fully overlap), unlike tennis/club football where much
+    larger samples let us confidently say a feature did or didn't help.
+    Kept in the model because the underlying rationale (Elo can't represent
+    "bogey team" matchups) is sound and the result isn't a clear negative,
+    but this is a genuinely unresolved question, not a validated win."""
+    return [effective_diff(engine, team_a, team_b, host_bonus_by_country), h2h_diff_live(engine, team_a, team_b)]
 
 
 def ensure_club_db_populated(league_id: str):

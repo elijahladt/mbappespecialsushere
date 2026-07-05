@@ -1,13 +1,26 @@
-"""Elo-diff -> match-winner probability, fit on historical World Cup KNOCKOUT
-matches specifically (not group stage), since Kalshi's advance/winner markets
-settle to a definite winner after regulation/extra-time/penalties -- a
-different target than a 3-way 1X2 group-stage market.
+"""Elo-diff + head-to-head -> match-winner probability, fit on historical
+World Cup KNOCKOUT matches specifically (not group stage), since Kalshi's
+advance/winner markets settle to a definite winner after regulation/
+extra-time/penalties -- a different target than a 3-way 1X2 group-stage
+market.
 
 Known data limitation: the historical results dataset records only the final
 score, not whether a draw was decided by a penalty shootout, so drawn knockout
 matches (shootout-decided) are excluded from the training set below -- we
 simply don't know who advanced in those rows. See the shootout_adjustment()
 heuristic for how that gap is handled at prediction time instead.
+
+h2h_diff (head-to-head win-count difference between these two specific
+teams) was added after a discussion about tactical/matchup effects a pure
+Elo rating can't represent -- Elo assumes strength is transitive (A>B,
+B>C implies A>C), but real football has genuine "bogey team" matchups
+that violate that. Whether this actually helps is checked the same way as
+every other feature in this project: walk-forward Brier vs. the
+single-feature baseline (see src/backtest/walk_forward.py) -- we could NOT
+also check it against a real market's P&L the way club football/tennis
+were, since no free historical World Cup odds dataset exists (checked
+directly; the one real option, balldontlie's FIFA API, gates odds behind a
+paid tier). That gap is disclosed, not silently assumed away.
 """
 import sys
 from pathlib import Path
@@ -43,6 +56,10 @@ def effective_elo_diff(row) -> float:
     return (row["home_elo_pre"] + adv) - row["away_elo_pre"]
 
 
+def build_features(row):
+    return [effective_elo_diff(row), row["home_h2h_pre"] - row["away_h2h_pre"]]
+
+
 def build_training_set(feature_rows):
     X, y = [], []
     for row in feature_rows:
@@ -50,7 +67,7 @@ def build_training_set(feature_rows):
             continue
         if row["home_score"] == row["away_score"]:
             continue  # shootout-decided; excluded, see module docstring
-        X.append([effective_elo_diff(row)])
+        X.append(build_features(row))
         y.append(1 if row["home_score"] > row["away_score"] else 0)
     return np.array(X), np.array(y)
 
@@ -64,12 +81,23 @@ def fit_link(feature_rows=None):
     return model, len(y)
 
 
-def win_probability(model, elo_diff_home_minus_away: float) -> float:
-    """Probability the 'home' side (first team, elo_diff = home - away
-    including any home-advantage/neutral adjustment already applied by the
-    caller) wins the tie outright."""
-    p = model.predict_proba([[elo_diff_home_minus_away]])[0, 1]
+def win_probability(model, features) -> float:
+    """`features` is the [elo_diff, h2h_diff] vector from build_features()
+    or h2h_diff_live() + a caller-computed elo_diff -- probability the
+    'home'/'A' side wins the tie outright."""
+    p = model.predict_proba([features])[0, 1]
     return shootout_adjustment(p)
+
+
+def h2h_diff_live(engine, team_a: str, team_b: str) -> float:
+    """Head-to-head win-count difference for a LIVE, not-yet-played match,
+    reading current state off engine.h2h (attached by src/features/elo.py's
+    run_all()). Kept separate from the app's existing effective_diff()
+    host-nation-bonus logic (app/common.py) -- that stays exactly where it
+    is; this is just the one new piece to combine with it."""
+    pair_key = frozenset({team_a, team_b})
+    record = engine.h2h.get(pair_key, {})
+    return record.get(team_a, 0) - record.get(team_b, 0)
 
 
 def shootout_adjustment(p: float, band: float = 0.10, shrink: float = 0.15) -> float:
@@ -86,6 +114,8 @@ def shootout_adjustment(p: float, band: float = 0.10, shrink: float = 0.15) -> f
 if __name__ == "__main__":
     model, n = fit_link()
     print(f"Fit on {n} historical WC knockout matches with a decisive result.")
-    print(f"Coefficient (per Elo point): {model.coef_[0][0]:.5f}, intercept: {model.intercept_[0]:.4f}")
+    print(f"Coefficients (elo_diff, h2h_diff): {model.coef_[0]}, intercept: {model.intercept_[0]:.4f}")
     for diff in (-300, -150, -50, 0, 50, 150, 300):
-        print(f"  eff_elo_diff={diff:+5d} -> P(home wins tie) = {win_probability(model, diff):.3f}")
+        print(f"  eff_elo_diff={diff:+5d}, h2h_diff=0 -> P(home wins tie) = {win_probability(model, [diff, 0]):.3f}")
+    for h2h in (-3, -1, 0, 1, 3):
+        print(f"  eff_elo_diff=0, h2h_diff={h2h:+d} -> P(home wins tie) = {win_probability(model, [0, h2h]):.3f}")

@@ -6,8 +6,7 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from src.config import LEAGUES
-from src.features.club_elo import HOME_ADVANTAGE
-from src.models.club_winprob_link import win_draw_away_probability
+from src.models.club_winprob_link import win_draw_away_probability, live_feature_vector
 from src.ingest.oddspapi_client import get_betmgm_draw_no_bet_matches
 from src.trading.devig import implied_prob, devig_proportional
 from src.trading.edge_calc import edge, ev_per_dollar
@@ -27,10 +26,11 @@ st.caption(
 )
 st.warning(
     "New and much less battle-tested than the World Cup board: one league (Premier League), "
-    "Elo-diff -> 3-way logistic only, walk-forward validated per-season against a naive "
-    "home/draw/away base-rate baseline (see the backtest summary below) -- but this is a "
-    "single feature model on one league's data, not the multi-feature, multi-tournament "
-    "validation behind the WC board. Treat edges here with extra skepticism.",
+    "walk-forward validated per-season against a naive home/draw/away base-rate baseline (see "
+    "the backtest summary below). Features are Elo-diff + rolling recent-form -- form was "
+    "added specifically to try to close the gap to the real market (see the P&L disclosure "
+    "below), and honestly it barely moved the needle: pooled Brier went from 0.5886 to 0.5882 "
+    "and the P&L result is essentially unchanged. Treat edges here with extra skepticism.",
     icon="⚠️",
 )
 
@@ -83,6 +83,30 @@ if backtest:
            else "model does NOT beat the naive baseline; treat this league's edges as unvalidated.")
     )
 
+
+@st.cache_data(ttl=3600, show_spinner="Running walk-forward P&L simulation against real historical Bet365 odds...")
+def load_pnl_summary(league_id: str):
+    from src.features.club_elo import run_all as club_run_all
+    from src.backtest.pnl_backtest_club import simulate as pnl_simulate
+
+    _, feature_rows = club_run_all(league_id)
+    return pnl_simulate(feature_rows, edge_threshold=0.0)
+
+
+pnl = load_pnl_summary(league_id)
+if pnl["n_bets"]:
+    st.error(
+        f"**Beating a naive baseline is NOT the same as beating the real market.** Walk-forward "
+        f"simulation of actually placing fractional-Kelly bets against real historical Bet365 "
+        f"closing odds ({pnl['n_bets']} bets, {pnl['n_skipped_no_odds']} matches skipped for missing "
+        f"odds): starting from $1,000, this model would have ended with ${pnl['final_bankroll']:.2f} "
+        f"({pnl['roi_pct']:+.1f}% ROI). Bet365's closing lines are a much sharper, more relevant "
+        f"benchmark than the naive baseline above -- this model does not currently have a real, "
+        f"exploitable edge against them. Treat every 'edge' shown below as unproven against a live "
+        f"market, not as a validated signal.",
+        icon="🚨",
+    )
+
 st.caption(
     "Betting market: BetMGM (via OddsPapi) does not offer a straight 3-way 'Full Time Result' "
     "line for club league fixtures -- checked directly. What it does offer is 'Draw No Bet' "
@@ -112,8 +136,8 @@ else:
     rows = []
     for m in matches:
         home, away = m["home_team"], m["away_team"]
-        diff = (engine.get(home) + HOME_ADVANTAGE) - engine.get(away)
-        p_away, p_draw, p_home = win_draw_away_probability(model, diff)
+        features = live_feature_vector(engine, home, away)
+        p_away, p_draw, p_home = win_draw_away_probability(model, features)
 
         # Conditional on no draw, to match the Draw No Bet framing.
         denom = p_home + p_away

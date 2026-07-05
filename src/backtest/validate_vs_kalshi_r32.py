@@ -10,6 +10,7 @@ engine already includes these R32 results in its ratings, which would leak
 the outcome back into "what the model would have said beforehand."
 """
 import sys
+from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -18,7 +19,7 @@ import requests
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from src.db import get_connection
 from src.features.elo import EloEngine, HOME_ADVANTAGE
-from src.models.winprob_link import win_probability
+from src.models.winprob_link import win_probability, h2h_diff_live
 from src.ingest.kalshi_client import BASE_URL, get_markets_for_event
 from src.ingest.wc2026_results import normalize_team
 from src.backtest.metrics import brier_score, bootstrap_brier_ci
@@ -71,7 +72,8 @@ def get_opening_price(ticker: str, open_time_iso: str):
 def elo_asof(cutoff_date: str):
     """Rebuild Elo using only matches strictly before cutoff_date -- avoids
     leaking the very match being predicted (or same-day matches) into its
-    own pre-match rating."""
+    own pre-match rating. Also tracks head-to-head record the same way
+    src/features/elo.py's run_all() does, attached as engine.h2h."""
     conn = get_connection()
     matches = conn.execute(
         """SELECT date, home_team, away_team, home_score, away_score, tier, neutral
@@ -80,8 +82,15 @@ def elo_asof(cutoff_date: str):
     ).fetchall()
     conn.close()
     engine = EloEngine()
+    h2h = defaultdict(lambda: defaultdict(int))
     for date, home, away, hs, as_, tier, neutral in matches:
         engine.process_match(home, away, hs, as_, tier, bool(neutral))
+        pair_key = frozenset({home, away})
+        if hs > as_:
+            h2h[pair_key][home] += 1
+        elif as_ > hs:
+            h2h[pair_key][away] += 1
+    engine.h2h = h2h
     return engine
 
 
@@ -106,7 +115,7 @@ def build_comparison():
 
             adv = HOME_ADVANTAGE if team in HOST_NATIONS and opponent not in HOST_NATIONS else 0.0
             diff = (engine.get(team) + adv) - engine.get(opponent)
-            model_prob = win_probability(model, diff)
+            model_prob = win_probability(model, [diff, h2h_diff_live(engine, team, opponent)])
 
             opening_price = get_opening_price(m["ticker"], m["open_time"])
             actual = 1 if m["result"] == "yes" else 0
@@ -130,13 +139,24 @@ def fit_link_asof(cutoff_date: str):
     conn.close()
 
     engine = EloEngine()
+    h2h = defaultdict(lambda: defaultdict(int))
     feature_rows = []
     for date, home, away, hs, as_, tournament, tier, neutral, stage in matches:
+        pair_key = frozenset({home, away})
+        home_h2h_pre = h2h[pair_key][home]
+        away_h2h_pre = h2h[pair_key][away]
+
         result = engine.process_match(home, away, hs, as_, tier, bool(neutral))
         feature_rows.append({
             "date": date, "home_team": home, "away_team": away, "home_score": hs, "away_score": as_,
-            "tournament": tournament, "tier": tier, "neutral": bool(neutral), "stage": stage, **result,
+            "tournament": tournament, "tier": tier, "neutral": bool(neutral), "stage": stage,
+            "home_h2h_pre": home_h2h_pre, "away_h2h_pre": away_h2h_pre, **result,
         })
+
+        if hs > as_:
+            h2h[pair_key][home] += 1
+        elif as_ > hs:
+            h2h[pair_key][away] += 1
 
     from sklearn.linear_model import LogisticRegression
     X, y = build_training_set(feature_rows)

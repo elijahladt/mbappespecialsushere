@@ -5,7 +5,7 @@ import pandas as pd
 import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-from src.models.winprob_link import win_probability
+from src.models.winprob_link import win_probability, h2h_diff_live
 from src.ingest.oddspapi_client import get_betmgm_moneyline_matches
 from src.ingest.upcoming_fixtures import fetch_upcoming
 from src.features.auto_injury_report import build_live_report, team_auto_flags
@@ -142,7 +142,8 @@ else:
     for m in matches:
         team_a, team_b = m["teams"]
         diff = effective_diff(engine, team_a["team"], team_b["team"], host_bonus_by_country=host_bonus_by_country)
-        model_prob_a = win_probability(model, diff)
+        h2h_diff = h2h_diff_live(engine, team_a["team"], team_b["team"])
+        model_prob_a = win_probability(model, [diff, h2h_diff])
         model_prob_b = 1 - model_prob_a
 
         fair_a, fair_b = devig_proportional(team_a["decimal_odds"], team_b["decimal_odds"])
@@ -192,7 +193,8 @@ else:
                         )
 
                 adjusted_diff = (diff if team is team_a else -diff) + (own_total_adj - opp_total_adj)
-                adj_prob = win_probability(model, adjusted_diff)
+                adjusted_h2h = h2h_diff if team is team_a else -h2h_diff
+                adj_prob = win_probability(model, [adjusted_diff, adjusted_h2h])
                 decision_prob = adj_prob
 
             e = edge(decision_prob, raw_price)

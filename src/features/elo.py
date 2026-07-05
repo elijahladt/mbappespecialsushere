@@ -6,6 +6,7 @@ blowouts move ratings more than 1-goal wins, and a fixed home-advantage bonus
 that's zeroed out on neutral ground.
 """
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
@@ -76,8 +77,20 @@ def run_all(conn=None):
     ).fetchall()
 
     engine = EloEngine()
+    # Head-to-head record between two specific national teams -- added
+    # after a discussion about tactical/matchup effects Elo can't represent
+    # (Elo treats strength as one transitive scalar; some teams genuinely
+    # have a "bogey" opponent regardless of overall rating). Tracked across
+    # ALL match history (not just WC knockout matches, which is all the
+    # win-probability link itself trains on) since more history means a
+    # more stable signal -- same rationale as tennis's h2h feature.
+    h2h = defaultdict(lambda: defaultdict(int))  # frozenset({a,b}) -> {team: wins}
     feature_rows = []
     for date, home, away, home_score, away_score, tournament, tier, neutral, stage in matches:
+        pair_key = frozenset({home, away})
+        home_h2h_pre = h2h[pair_key][home]
+        away_h2h_pre = h2h[pair_key][away]
+
         result = engine.process_match(home, away, home_score, away_score, tier, bool(neutral))
         feature_rows.append({
             "date": date,
@@ -89,9 +102,20 @@ def run_all(conn=None):
             "tier": tier,
             "neutral": bool(neutral),
             "stage": stage,
+            "home_h2h_pre": home_h2h_pre,
+            "away_h2h_pre": away_h2h_pre,
             **result,
         })
 
+        if home_score > away_score:
+            h2h[pair_key][home] += 1
+        elif away_score > home_score:
+            h2h[pair_key][away] += 1
+        # draws add nothing to either side's h2h win count
+
+    # Attached so live inference (app pages) can read CURRENT h2h state for
+    # any two named teams, same as engine.ratings.
+    engine.h2h = h2h
     if own_conn:
         conn.close()
     return engine, feature_rows

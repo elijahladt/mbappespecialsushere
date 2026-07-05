@@ -41,3 +41,26 @@ def resolve_player(name: str, ratings: dict):
         if key.lower() == lower:
             return key, True
     return name, False
+
+
+# Live matches only expose a tournament NAME (via OddsPapi), not the
+# surface/best-of columns tennis-data.co.uk provides for historical rows --
+# guessed from well-known tournament names. Disclosed heuristic, not exact:
+# unrecognized tournaments default to Hard/best-of-3, the modal case on
+# both tours (most events are hard-court, and only ATP Slams are Bo5).
+_GRASS_TOURNAMENTS = ("wimbledon", "queen's", "queens", "eastbourne", "s-hertogenbosch", "mallorca", "newport")
+_CLAY_TOURNAMENTS = ("roland garros", "french open", "monte carlo", "madrid", "rome", "internazionali",
+                     "barcelona", "hamburg", "bastad", "gstaad", "kitzbuhel", "umag")
+_ATP_GRAND_SLAMS = ("wimbledon", "roland garros", "french open", "us open", "australian open")
+
+
+def guess_surface_and_bo5(tournament_name: str, tour: str):
+    name = (tournament_name or "").lower()
+    if any(t in name for t in _GRASS_TOURNAMENTS):
+        surface = "Grass"
+    elif any(t in name for t in _CLAY_TOURNAMENTS):
+        surface = "Clay"
+    else:
+        surface = "Hard"
+    is_bo5 = tour == "atp" and any(t in name for t in _ATP_GRAND_SLAMS)
+    return surface, is_bo5
