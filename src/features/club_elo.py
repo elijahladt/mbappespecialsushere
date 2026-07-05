@@ -16,6 +16,7 @@ display purposes is read from its own domestic pool regardless of which
 competition last updated it).
 """
 import sys
+from collections import defaultdict, deque
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
@@ -23,6 +24,20 @@ from src.db import get_connection
 
 BASE_RATING = 1500.0
 HOME_ADVANTAGE = 100.0
+FORM_WINDOW = 10  # matches, for the rolling recent-form feature -- added
+                   # after a walk-forward P&L backtest showed pure Elo-diff
+                   # falls well short of the market's own calibration; form
+                   # catches momentum/injury swings faster than Elo drifts.
+
+
+def _form_rate(results_deque) -> float:
+    """Average normalized result (1.0 win / 0.5 draw / 0.0 loss) over the
+    trailing window, or a neutral 0.5 if the team has no tracked history
+    yet -- same 0-1 scale and same neutral-prior convention as tennis's
+    _form_rate() in tennis_elo.py, so both features mean the same thing."""
+    if not results_deque:
+        return 0.5
+    return sum(results_deque) / len(results_deque)
 
 # competition_tier -> K-factor. 1 = domestic league play. Higher tiers
 # (continental group/knockout) get added here once Milestone 3 (Champions
@@ -87,14 +102,22 @@ def run_all(league_id: str, conn=None):
     own_conn = conn is None
     conn = conn or get_connection()
     matches = conn.execute(
-        """SELECT date, season, home_team, away_team, home_score, away_score, competition_tier
+        """SELECT date, season, home_team, away_team, home_score, away_score, competition_tier,
+                  b365_home, b365_draw, b365_away, pinnacle_home, pinnacle_draw, pinnacle_away
            FROM club_matches WHERE league_id = ? ORDER BY date ASC, rowid ASC""",
         (league_id,),
     ).fetchall()
 
     engine = ClubEloEngine(league_id)
+    recent_results = defaultdict(lambda: deque(maxlen=FORM_WINDOW))
     feature_rows = []
-    for date, season, home, away, home_score, away_score, competition_tier in matches:
+    for (date, season, home, away, home_score, away_score, competition_tier,
+         b365_home, b365_draw, b365_away, pinnacle_home, pinnacle_draw, pinnacle_away) in matches:
+        # Read form BEFORE this match updates it -- leak-free, same
+        # discipline as reading Elo's pre-match ratings before process_match.
+        home_form_pre = _form_rate(recent_results[home])
+        away_form_pre = _form_rate(recent_results[away])
+
         result = engine.process_match(home, away, home_score, away_score, competition_tier)
         feature_rows.append({
             "date": date,
@@ -104,9 +127,29 @@ def run_all(league_id: str, conn=None):
             "home_score": home_score,
             "away_score": away_score,
             "competition_tier": competition_tier,
+            "home_form_pre": home_form_pre,
+            "away_form_pre": away_form_pre,
+            # Real historical bookmaker odds -- NOT used as model features (that
+            # would be a different, odds-implied-probability model), only kept
+            # here so backtests can simulate what actually betting against them
+            # would have earned, alongside the calibration-only Brier checks.
+            "b365_home": b365_home, "b365_draw": b365_draw, "b365_away": b365_away,
+            "pinnacle_home": pinnacle_home, "pinnacle_draw": pinnacle_draw, "pinnacle_away": pinnacle_away,
             **result,
         })
 
+        if home_score > away_score:
+            home_result, away_result = 1.0, 0.0
+        elif home_score == away_score:
+            home_result, away_result = 0.5, 0.5
+        else:
+            home_result, away_result = 0.0, 1.0
+        recent_results[home].append(home_result)
+        recent_results[away].append(away_result)
+
+    # Attached so live inference (app pages) can read CURRENT form state for
+    # any two named teams, same as engine.ratings.
+    engine.recent_results = recent_results
     if own_conn:
         conn.close()
     return engine, feature_rows

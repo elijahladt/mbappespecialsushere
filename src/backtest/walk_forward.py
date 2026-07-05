@@ -12,7 +12,7 @@ from sklearn.linear_model import LogisticRegression
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from src.features.elo import run_all
 from src.models.winprob_link import (
-    WC_KNOCKOUT_START, build_training_set, effective_elo_diff, is_knockout,
+    WC_KNOCKOUT_START, build_training_set, build_features, is_knockout,
     shootout_adjustment,
 )
 from src.backtest.metrics import brier_score, bootstrap_brier_ci, reliability_buckets
@@ -44,8 +44,7 @@ def walk_forward(feature_rows):
 
         year_probs, year_outcomes = [], []
         for r in test_rows:
-            diff = effective_elo_diff(r)
-            p = shootout_adjustment(model.predict_proba([[diff]])[0, 1])
+            p = shootout_adjustment(model.predict_proba([build_features(r)])[0, 1])
             outcome = 1 if r["home_score"] > r["away_score"] else 0
             year_probs.append(p)
             year_outcomes.append(outcome)

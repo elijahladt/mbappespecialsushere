@@ -185,6 +185,10 @@ def get_betmgm_tennis_matches(category_slug: str):
     tournaments = discover_active_tennis_tournaments(category_slug)
     if not tournaments:
         return []
+    tournament_names = dict(tournaments)  # tournamentId -> name, needed so the
+    # live page can guess surface/best-of from the tournament name (e.g.
+    # "Wimbledon" -> grass, "Roland Garros" -> clay) -- OddsPapi's fixture
+    # objects don't carry surface/best-of directly.
     tournament_ids = ",".join(str(tid) for tid, _ in tournaments)
 
     fixtures = _get("/v4/odds-by-tournaments", {
@@ -210,6 +214,7 @@ def get_betmgm_tennis_matches(category_slug: str):
             "start_time": fx["startTime"],
             "price1": float(p1["price"]),
             "price2": float(p2["price"]),
+            "tournament_name": tournament_names.get(fx.get("tournamentId"), ""),
         })
         ids_needed.update([fx["participant1Id"], fx["participant2Id"]])
 
@@ -225,6 +230,7 @@ def get_betmgm_tennis_matches(category_slug: str):
             "player2_raw": p2_raw,
             "player1_price": c["price1"],
             "player2_price": c["price2"],
+            "tournament_name": c["tournament_name"],
         })
     return rows
 

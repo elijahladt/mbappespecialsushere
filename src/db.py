@@ -63,6 +63,8 @@ CREATE TABLE IF NOT EXISTS tennis_matches (
     tournament TEXT NOT NULL,
     surface TEXT,
     round TEXT,
+    series TEXT,
+    best_of INTEGER,
     winner TEXT NOT NULL,
     loser TEXT NOT NULL,
     comment TEXT,

@@ -6,7 +6,7 @@ import pandas as pd
 import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from src.models.winprob_link import win_probability
+from src.models.winprob_link import win_probability, h2h_diff_live
 from src.ingest.kalshi_client import get_match_markets
 from src.ingest.upcoming_fixtures import fetch_upcoming
 from src.trading.edge_calc import edge, ev_per_dollar
@@ -26,7 +26,7 @@ from src.features.altitude_timezone import (
 )
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import load_engine_and_model, effective_diff, HOST_NATIONS, DEFAULT_HOST_BONUS_BY_COUNTRY
+from common import load_engine_and_model, effective_diff, full_feature_vector, HOST_NATIONS, DEFAULT_HOST_BONUS_BY_COUNTRY
 
 INJURY_NOTES_PATH = Path(__file__).resolve().parent.parent / "data" / "injury_notes.json"
 
@@ -85,11 +85,16 @@ def load_injury_notes():
 st.title("World Cup 2026 Edge Board — Kalshi")
 st.warning(
     "**Small-sample validation only.** Walk-forward backtest on 2010-2022 knockout "
-    "matches (n=49) shows real skill vs. a naive 50/50 baseline (Brier 0.159, 95% CI "
-    "[0.116, 0.206] vs 0.25), but 49 matches is not enough to be confident in exact "
+    "matches (n=49) shows real skill vs. a naive 50/50 baseline (Brier 0.165, 95% CI "
+    "[0.120, 0.212] vs 0.25), but 49 matches is not enough to be confident in exact "
     "edge sizes — especially the big ones (20+ points) below, which likely reflect the "
     "model missing information the market has (injuries, current form, squad news), not "
-    "a real 20-point market mispricing. Use fractional Kelly, trust small edges more than huge ones.",
+    "a real 20-point market mispricing. Use fractional Kelly, trust small edges more than huge ones. "
+    "Model now includes head-to-head record alongside Elo (added to address a real gap: Elo "
+    "assumes team strength is transitive and can't represent 'bogey team' matchups) -- on this "
+    "same 2010-2022 sample it's a statistical wash (0.165 with it vs. 0.159 without, well within "
+    "each other's confidence interval given only 49 matches), but see the live Kalshi comparison "
+    "further down the page for a more encouraging real-market result with it included.",
     icon="⚠️",
 )
 
@@ -208,7 +213,8 @@ else:
     for m in markets:
         team_a, team_b = m["teams"]
         diff = effective_diff(engine, team_a["team"], team_b["team"], host_bonus_by_country=host_bonus_by_country)
-        model_prob_a = win_probability(model, diff)
+        h2h_diff = h2h_diff_live(engine, team_a["team"], team_b["team"])
+        model_prob_a = win_probability(model, [diff, h2h_diff])
         model_prob_b = 1 - model_prob_a
 
         rest = {}
@@ -269,7 +275,8 @@ else:
                 # This team's Elo effectively shifts by its own penalty minus the
                 # opponent's (their disadvantage helps this team's relative odds).
                 adjusted_diff = diff + (own_total_adj - opp_total_adj) if team is team_a else -diff + (own_total_adj - opp_total_adj)
-                adjusted_prob = win_probability(model, adjusted_diff)
+                adjusted_h2h = h2h_diff if team is team_a else -h2h_diff
+                adjusted_prob = win_probability(model, [adjusted_diff, adjusted_h2h])
 
             decision_prob = adjusted_prob if apply_any_adjustment else model_prob
             e = edge(decision_prob, team["price"])

@@ -6,9 +6,9 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from src.config import TENNIS_TOURS
-from src.models.tennis_winprob_link import win_probability
+from src.models.tennis_winprob_link import win_probability, live_feature_vector
 from src.ingest.oddspapi_client import get_betmgm_tennis_matches
-from src.ingest.tennis_name_match import normalize_oddspapi_name, resolve_player
+from src.ingest.tennis_name_match import normalize_oddspapi_name, resolve_player, guess_surface_and_bo5
 from src.trading.devig import implied_prob, devig_proportional
 from src.trading.edge_calc import edge, ev_per_dollar
 from src.trading.kelly import fractional_kelly_stake
@@ -27,11 +27,15 @@ st.caption(
     "or their data."
 )
 st.warning(
-    "New: single-feature Elo-diff model, walk-forward validated per-year against a naive "
-    "50/50 baseline (see below) on ONE tour at a time, no tournament-importance weighting "
-    "(Grand Slam vs. ATP250 all use the same K-factor) and no surface-specific rating -- "
-    "both real, disclosed simplifications, not bugs. Treat edges with the same skepticism "
-    "as the other boards.",
+    "Multi-feature model (Elo-diff, surface-specific Elo-diff, rolling recent form, "
+    "head-to-head record, best-of-5 + interaction), walk-forward validated per-year against "
+    "a naive 50/50 baseline (see below). Added specifically to try to close the gap to the "
+    "real market found in the single-feature version -- it helped a little (Brier improved "
+    "~1-2%) but the P&L simulation against real historical Bet365 odds is still a near-total "
+    "loss (see below). Live surface/best-of are GUESSED from the tournament name (a small, "
+    "disclosed heuristic), not read from a reliable source. Treat edges with the same "
+    "skepticism as the other boards -- more so, given how little the extra features moved "
+    "the needle.",
     icon="⚠️",
 )
 
@@ -74,6 +78,30 @@ if backtest:
         + ("model beats the naive baseline." if beats else "model does NOT beat the naive baseline; treat this tour's edges as unvalidated.")
     )
 
+
+@st.cache_data(ttl=3600, show_spinner="Running walk-forward P&L simulation against real historical Bet365 odds...")
+def load_pnl_summary(tour: str):
+    from src.features.tennis_elo import run_all as tennis_run_all
+    from src.backtest.pnl_backtest_tennis import simulate as pnl_simulate
+
+    _, feature_rows = tennis_run_all(tour)
+    return pnl_simulate(feature_rows, edge_threshold=0.0)
+
+
+pnl = load_pnl_summary(tour)
+if pnl["n_bets"]:
+    st.error(
+        f"**Beating a naive baseline is NOT the same as beating the real market.** Walk-forward "
+        f"simulation of actually placing fractional-Kelly bets against real historical Bet365 "
+        f"Match Winner odds ({pnl['n_bets']} bets, {pnl['n_skipped_no_odds']} matches skipped for missing "
+        f"odds): starting from $1,000, this model would have ended with ${pnl['final_bankroll']:.2f} "
+        f"({pnl['roi_pct']:+.1f}% ROI). Bet365's closing lines for {tour_cfg['label']} are a much "
+        f"sharper, more relevant benchmark than the naive 50/50 baseline above -- this model does not "
+        f"currently have a real, exploitable edge against them. Treat every 'edge' shown below as "
+        f"unproven against a live market, not as a validated signal.",
+        icon="🚨",
+    )
+
 st.caption(
     "Betting market: BetMGM's tennis 'Match Winner' line (via OddsPapi) is a clean 2-way "
     "market -- tennis has no draw, so unlike the club football board this needs no "
@@ -102,9 +130,11 @@ else:
         p1, matched1 = resolve_player(normalize_oddspapi_name(m["player1_raw"]), engine.ratings)
         p2, matched2 = resolve_player(normalize_oddspapi_name(m["player2_raw"]), engine.ratings)
 
-        diff = engine.get(p1) - engine.get(p2)
-        model_prob_1 = win_probability(model, diff)
-        model_prob_2 = 1 - model_prob_1
+        surface, is_bo5 = guess_surface_and_bo5(m.get("tournament_name", ""), tour)
+        features_1 = live_feature_vector(engine, p1, p2, surface=surface, is_bo5=is_bo5)
+        features_2 = live_feature_vector(engine, p2, p1, surface=surface, is_bo5=is_bo5)
+        model_prob_1 = win_probability(model, features_1)
+        model_prob_2 = win_probability(model, features_2)
 
         raw1 = implied_prob(m["player1_price"])
         raw2 = implied_prob(m["player2_price"])
