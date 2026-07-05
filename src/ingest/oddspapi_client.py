@@ -14,27 +14,24 @@ import sys
 from pathlib import Path
 
 import requests
-from dotenv import load_dotenv
-import os
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from src.config import get_secret
 from src.ingest.wc2026_results import normalize_team
 
-load_dotenv()
-
 BASE_URL = "https://api.oddspapi.io"
-API_KEY = os.environ.get("ODDSPAPI_KEY")
 WC_TOURNAMENT_ID = 16
 MONEYLINE_MARKET_ID = "10728"  # outcomes: 10728 = participant 1, 10729 = participant 2
 
 
 def _get(path: str, params: dict):
-    if not API_KEY:
+    api_key = get_secret("ODDSPAPI_KEY")
+    if not api_key:
         raise RuntimeError(
-            "ODDSPAPI_KEY not set. Copy .env.example to .env and add your "
-            "key from https://oddspapi.io/"
+            "ODDSPAPI_KEY not set. Locally: copy .env.example to .env and add your key from "
+            "https://oddspapi.io/. On Streamlit Cloud: add it under App settings -> Secrets."
         )
-    resp = requests.get(f"{BASE_URL}{path}", params={**params, "apiKey": API_KEY}, timeout=30)
+    resp = requests.get(f"{BASE_URL}{path}", params={**params, "apiKey": api_key}, timeout=30)
     resp.raise_for_status()
     return resp.json()
 

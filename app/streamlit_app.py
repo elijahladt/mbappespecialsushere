@@ -363,7 +363,7 @@ st.info(
     "no 2026 data since the tournament is still in progress, so it has nothing to work "
     "with for tomorrow's matches. It's shown here as a validated research comparison on "
     "historical matches only. To get a live second-model column next to Elo above, add "
-    "an API-Football key to .env (see .env.example) -- that unlocks a deployable variant "
+    "an API-Football key (.env locally, or Streamlit Cloud Secrets when deployed) -- that unlocks a deployable variant "
     "using recent form + injuries, which (unlike StatsBomb) has 2026 coverage.",
     icon="🔬",
 )

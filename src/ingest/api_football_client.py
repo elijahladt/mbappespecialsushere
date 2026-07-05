@@ -11,16 +11,12 @@ import time
 from pathlib import Path
 
 import requests
-from dotenv import load_dotenv
-import os
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from src.config import get_secret
 from src.db import get_connection
 
-load_dotenv()
-
 BASE_URL = "https://v3.football.api-sports.io"
-API_KEY = os.environ.get("API_FOOTBALL_KEY")
 
 CACHE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS api_football_cache (
@@ -50,16 +46,18 @@ def _cached_get(path: str, params: dict, ttl_seconds: int = 86400):
         conn.close()
         return json.loads(row[1])
 
-    if not API_KEY:
+    api_key = get_secret("API_FOOTBALL_KEY")
+    if not api_key:
         conn.close()
         raise RuntimeError(
-            "API_FOOTBALL_KEY not set. Copy .env.example to .env and add your "
-            "free key from https://www.api-football.com/"
+            "API_FOOTBALL_KEY not set. Locally: copy .env.example to .env and add your free "
+            "key from https://www.api-football.com/. On Streamlit Cloud: add it under App "
+            "settings -> Secrets."
         )
 
     resp = requests.get(
         f"{BASE_URL}{path}",
-        headers={"x-apisports-key": API_KEY},
+        headers={"x-apisports-key": api_key},
         params=params,
         timeout=30,
     )
