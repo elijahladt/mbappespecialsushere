@@ -21,6 +21,20 @@ HARD_INJURY_WEIGHT = 0.6      # weight for a player confirmed subbed off injured
 SOFT_INJURY_WEIGHT = 0.25     # weight for a softer "stoppage mentioned injury" signal
 MAX_TEAM_IMPACT = 0.6         # cap: never treat a team as losing more than 60% of its output to missing players
 
+# Star-player boost: does a team with ONE standout individual attacker (e.g.
+# Norway's Haaland) deserve a bump beyond what team-level Elo captures? Elo
+# has no concept of individual player quality at all. Backtested with a
+# StatsBomb-based proxy (src/backtest/validate_star_player.py, leave-one-
+# tournament-out on 2018/2022): result was INCONCLUSIVE -- Brier 0.236 with
+# it vs. 0.233 without, on only 97 matches across 2 tournaments, not a clean
+# win. Shipped anyway as a disclosed, OFF-by-default heuristic (same
+# treatment as the injury adjustment above) since the underlying question
+# ("should individual star quality matter") is real even though we couldn't
+# prove an effect size on this small a sample -- not statistically
+# validated, don't treat it as more than a toggle to experiment with.
+DEFAULT_STAR_BOOST_SCALE = 12.0  # Elo points per goal+assist by the team's leading scorer this tournament
+MAX_STAR_BOOST = 120.0            # cap: even a huge individual tally shouldn't swing more than this many Elo points
+
 
 def team_goal_contribution_shares(goals_df, team: str):
     """{player: share_of_team_goal_plus_assist_events} for one team, using
@@ -73,6 +87,34 @@ def elo_adjustment_for_team(team: str, goals_df, cards_df, injuries_df, upcoming
     return -total_impact * impact_scale, detail
 
 
+def leading_scorer_count(goals_df, team: str):
+    """(player, count) for the team's single biggest goal+assist contributor
+    this tournament, or (None, 0) if the team has no recorded events yet.
+    Uses the raw COUNT, not the share used by team_goal_contribution_shares()
+    above -- share alone can't distinguish "one player got both of this
+    team's 2 total contributions" from "one player has 8 of this team's 10",
+    and it's the absolute output that reflects real individual quality."""
+    team_goals = goals_df[goals_df["team"] == team]
+    if team_goals.empty:
+        return None, 0
+    counts = team_goals.groupby("player").size()
+    top_player = counts.idxmax()
+    return top_player, int(counts.max())
+
+
+def star_player_boost_for_team(team: str, goals_df, boost_scale: float = DEFAULT_STAR_BOOST_SCALE):
+    """POSITIVE Elo-point adjustment for `team` based on its leading
+    scorer's real goal+assist count this tournament -- the mirror image of
+    elo_adjustment_for_team() above (which only ever subtracts, for
+    confirmed-missing players). See module-level note on DEFAULT_STAR_BOOST_SCALE
+    for the (inconclusive) backtest this is based on."""
+    player, count = leading_scorer_count(goals_df, team)
+    if not player or count == 0:
+        return 0.0, []
+    boost = min(count * boost_scale, MAX_STAR_BOOST)
+    return boost, [f"{player}: {count} goal+assist contribution(s) this tournament (leading scorer)"]
+
+
 if __name__ == "__main__":
     from datetime import date
     from src.features.auto_injury_report import build_live_report
@@ -80,4 +122,9 @@ if __name__ == "__main__":
     cards, injuries, goals = build_live_report()
     for team in ["Argentina", "Egypt", "Portugal", "Spain", "United States", "Belgium"]:
         adj, detail = elo_adjustment_for_team(team, goals, cards, injuries, upcoming_stage="round-of-16")
-        print(f"{team}: Elo adjustment = {adj:+.1f}  {detail}")
+        print(f"{team}: Injury/suspension Elo adjustment = {adj:+.1f}  {detail}")
+
+    print()
+    for team in ["Norway", "Brazil", "France", "Morocco", "Argentina"]:
+        boost, detail = star_player_boost_for_team(team, goals)
+        print(f"{team}: Star-player Elo boost = {boost:+.1f}  {detail}")

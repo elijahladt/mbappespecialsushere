@@ -67,7 +67,7 @@ def load_engine_and_model():
     model, n_train = fit_link(feature_rows)
     tracker, _ = compute_rest_travel()
     alt_tz_tracker, _ = compute_altitude_timezone()
-    return engine, model, n_train, tracker, alt_tz_tracker
+    return engine, model, n_train, tracker, alt_tz_tracker, feature_rows
 
 
 def effective_diff(engine, team_a, team_b, host_bonus_by_country: dict = None):

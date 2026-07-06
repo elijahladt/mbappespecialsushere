@@ -19,7 +19,7 @@ from src.features.auto_injury_report import build_live_report, team_auto_flags
 from src.backtest.validate_vs_kalshi_r32 import build_comparison as build_r32_comparison
 from src.backtest.metrics import brier_score, bootstrap_brier_ci
 from src.backtest.bankroll_simulation import simulate as simulate_bankroll
-from src.features.player_impact import elo_adjustment_for_team, DEFAULT_IMPACT_SCALE
+from src.features.player_impact import elo_adjustment_for_team, DEFAULT_IMPACT_SCALE, star_player_boost_for_team, DEFAULT_STAR_BOOST_SCALE
 from src.features.altitude_timezone import (
     base_camp_altitude_tz_delta, altitude_tz_elo_adjustment,
     DEFAULT_ALTITUDE_SCALE, DEFAULT_TZ_SCALE,
@@ -98,7 +98,7 @@ st.warning(
     icon="⚠️",
 )
 
-engine, model, n_train, tracker, _alt_tz_tracker = load_engine_and_model()
+engine, model, n_train, tracker, _alt_tz_tracker, _feature_rows_full = load_engine_and_model()
 st.caption(f"Elo engine trained on full match history; win-probability link fit on {n_train} historical World Cup knockout matches with a decisive result.")
 st.caption(
     "'Model prob (straight Elo)' does not depend on the live Kalshi price at all and is "
@@ -160,6 +160,24 @@ with st.sidebar:
                  "goals/assists this tournament gets a 150 Elo-point penalty (capped at 60% "
                  "of that if multiple players are out).",
         )
+    apply_star_player = st.toggle(
+        "Factor star-player boost into win probability (experimental)",
+        value=False,
+        help="POSITIVE adjustment for a team's leading individual scorer this tournament "
+             "(real ESPN goal+assist counts) -- e.g. Haaland/Messi/Mbappe-caliber output. "
+             "Backtested with a StatsBomb proxy on 2018+2022 (leave-one-tournament-out): "
+             "INCONCLUSIVE, Brier 0.236 with it vs. 0.233 without on only 97 matches -- not "
+             "a validated improvement, shown as an experimental toggle to explore the "
+             "'Elo has no concept of individual player quality' gap, not a proven fix for it.",
+    )
+    if apply_star_player:
+        star_boost_scale = st.slider(
+            "Star boost scale (Elo points per goal+assist by the leading scorer)", 0.0, 40.0,
+            DEFAULT_STAR_BOOST_SCALE, 2.0,
+            help="A guessed constant, not fitted -- e.g. 12 means a player with 7 goal+assist "
+                 "contributions this tournament (Haaland's tally right now) gives their team "
+                 "an +84 Elo boost, capped at 120.",
+        )
     apply_altitude_tz = st.toggle(
         "Factor altitude/jet-lag into win probability (experimental)",
         value=False,
@@ -200,7 +218,7 @@ with st.sidebar:
         st.cache_data.clear()
 
 markets = load_kalshi_markets()
-need_espn_events = show_health or apply_player_impact
+need_espn_events = show_health or apply_player_impact or apply_star_player
 need_upcoming_fixtures = need_espn_events or apply_altitude_tz
 upcoming = load_upcoming_fixtures() if need_upcoming_fixtures else {}
 injury_notes = load_injury_notes() if show_health else {}
@@ -241,7 +259,12 @@ else:
                 )
                 impact[team] = (adj, detail)
 
-        apply_any_adjustment = apply_player_impact or apply_altitude_tz
+        star = {}
+        if apply_star_player:
+            for team in (team_a["team"], team_b["team"]):
+                star[team] = star_player_boost_for_team(team, auto_goals, boost_scale=star_boost_scale)
+
+        apply_any_adjustment = apply_player_impact or apply_altitude_tz or apply_star_player
 
         for team, model_prob in ((team_a, model_prob_a), (team_b, model_prob_b)):
             if team["price"] is None:
@@ -271,6 +294,13 @@ else:
                         adjustment_detail.append(
                             f"altitude/jet-lag: {own_altitude_adj:+.0f} Elo (altitude change {own_alt}m, tz change {own_tz}h)"
                         )
+
+                if apply_star_player:
+                    own_star_adj, own_star_detail = star.get(team["team"], (0.0, []))
+                    opp_star_adj, _ = star.get(opp_team, (0.0, []))
+                    own_total_adj += own_star_adj
+                    opp_total_adj += opp_star_adj
+                    adjustment_detail.extend(own_star_detail)
 
                 # This team's Elo effectively shifts by its own penalty minus the
                 # opponent's (their disadvantage helps this team's relative odds).
@@ -356,6 +386,14 @@ else:
             "was checked and is empty for every team in this tournament, so it isn't used."
         )
         st.caption(f"'Manual injury notes' are hand-maintained in data/injury_notes.json ({len(injury_notes)} team(s) currently noted) for anything auto-detection can't catch (pre-tournament news, etc).")
+
+st.divider()
+st.info(
+    "**10,000-simulation match statistics (win/draw/loss, most likely scoreline, bootstrap "
+    "confidence intervals) have moved to their own page: 'Match Simulator' in the sidebar** -- "
+    "now covers every open match automatically instead of one at a time.",
+    icon="🎲",
+)
 
 st.divider()
 st.subheader("Current Elo ratings (top 20)")
