@@ -67,7 +67,7 @@ st.caption(
     "third-party aggregator, the only legitimate way to get real BetMGM prices (BetMGM's "
     "internal API is undocumented and scraping it would violate their ToS). Market is "
     "BetMGM's 'Winner (incl. overtime)' line -- the same 2-way, no-draw framing as Kalshi's "
-    "advance markets, matching how the Elo model here is fit (on WC knockout ties)."
+    "advance markets, matching what the Elo model here predicts (WC knockout ties)."
 )
 st.caption(
     "Sportsbooks bake in a margin (both sides' implied probabilities sum to over 100%), "
@@ -77,7 +77,7 @@ st.caption(
 )
 
 engine, model, n_train, tracker, _alt_tz_tracker, _feature_rows_full = load_engine_and_model()
-st.caption(f"Elo engine trained on full match history; win-probability link fit on {n_train} historical World Cup knockout matches with a decisive result.")
+st.caption(f"Elo engine trained on full match history; win-probability link fit on {n_train} historical competitive (non-friendly) matches with a decisive result -- see the main Kalshi page for why this expanded beyond WC-knockout-only.")
 st.caption(
     "'Altitude change' / 'Timezone change' use each team's REAL FIFA-published 2026 base "
     "camp (not the last city they played -- teams return to a fixed base between matches) "

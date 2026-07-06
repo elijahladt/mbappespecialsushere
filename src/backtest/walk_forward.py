@@ -1,7 +1,10 @@
 """Walk-forward validation of the Elo-diff win-probability link across past
-World Cups: for each tournament year, fit the link using ONLY knockout matches
-from earlier tournaments, then score its predictions on that year's matches.
-No tournament's outcome ever informs its own prediction.
+World Cups: for each tournament year, fit the link using build_training_set()
+(every decisive, non-friendly match strictly before that tournament -- see
+src/models/winprob_link.py and src/backtest/validate_expanded_training.py for
+why this replaced the old WC-knockout-only training set), then score its
+predictions on that year's WC knockout matches. No tournament's outcome ever
+informs its own prediction.
 """
 import sys
 from pathlib import Path
@@ -64,9 +67,9 @@ if __name__ == "__main__":
     _, feature_rows = run_all()
     probs, outcomes, per_year = walk_forward(feature_rows)
 
-    print("Walk-forward results (train = only knockout matches strictly before the test tournament):\n")
+    print("Walk-forward results (train = all competitive/non-friendly matches strictly before the test tournament):\n")
     for year, stats in per_year.items():
-        print(f"  {year}: n={stats['n']:2d} test matches (trained on {stats['n_train']} prior knockout matches), Brier={stats['brier']:.4f}")
+        print(f"  {year}: n={stats['n']:2d} test matches (trained on {stats['n_train']} prior competitive matches), Brier={stats['brier']:.4f}")
 
     if probs:
         pooled_brier = brier_score(probs, outcomes)

@@ -7,6 +7,13 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from src.models.winprob_link import h2h_diff_live
 from src.ingest.kalshi_client import get_match_markets
+from src.ingest.upcoming_fixtures import fetch_upcoming
+from src.features.auto_injury_report import build_live_report
+from src.features.player_impact import elo_adjustment_for_team, DEFAULT_IMPACT_SCALE, star_player_boost_for_team, DEFAULT_STAR_BOOST_SCALE
+from src.features.altitude_timezone import (
+    base_camp_altitude_tz_delta, altitude_tz_elo_adjustment,
+    DEFAULT_ALTITUDE_SCALE, DEFAULT_TZ_SCALE,
+)
 from src.models.goal_simulation import (
     fit_goal_model, simulate_match, simulate_match_efficiency,
     fit_xg_goal_model, simulate_match_xg,
@@ -17,7 +24,7 @@ from src.trading.edge_calc import edge, ev_per_dollar
 from src.trading.kelly import fractional_kelly_stake
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from common import load_engine_and_model, effective_diff
+from common import load_engine_and_model, effective_diff, HOST_NATIONS, DEFAULT_HOST_BONUS_BY_COUNTRY
 
 st.set_page_config(page_title="Match Simulator", layout="wide")
 
@@ -31,7 +38,7 @@ st.caption(
 st.warning(
     "**Two versions, backtested honestly, very different results.** Walk-forward on "
     "2010-2022 WC knockout matches (src/backtest/validate_goal_simulation.py): the default "
-    "Elo-based version scores Brier=0.168 (vs. the main model's 0.165 -- roughly comparable). "
+    "Elo-based version scores Brier=0.1683 (vs. the main model's 0.1541 -- roughly comparable). "
     "An experimental version using each team's own rolling offensive/defensive efficiency "
     "(real goals scored/conceded, not Elo) looked dramatically better on one single real "
     "match (correctly favored Norway over Brazil, which the Elo-based version didn't) -- but "
@@ -66,6 +73,54 @@ with st.sidebar:
         help="Backtested WORSE than the default (Brier 0.210 vs 0.168) -- off by default. "
              "Shown for exploration, not because it's recommended.",
     )
+
+    st.header("Win-probability adjustments")
+    st.caption(
+        "Same disclosed, off-by-default heuristics as the Kalshi and BetMGM boards -- applied "
+        "here as an Elo-point shift to the effective Elo diff feeding the goal simulator below. "
+        "Only affects the default Elo-diff-based simulation, not the efficiency-based toggle "
+        "above (that method doesn't use an Elo diff at all)."
+    )
+    apply_player_impact = st.toggle(
+        "Factor suspensions/injuries into win probability (experimental)",
+        value=False,
+        help="Disclosed heuristic based on confirmed-missing players' real goal+assist share "
+             "this tournament (from ESPN match events) -- not statistically fitted.",
+    )
+    if apply_player_impact:
+        impact_scale = st.slider(
+            "Impact scale (Elo points for 100% of a team's output missing)", 0.0, 400.0,
+            DEFAULT_IMPACT_SCALE, 10.0,
+        )
+    apply_star_player = st.toggle(
+        "Factor star-player boost into win probability (experimental)",
+        value=False,
+        help="POSITIVE adjustment for a team's leading individual scorer this tournament. "
+             "Backtested INCONCLUSIVE (Brier 0.236 with it vs. 0.233 without, n=97) -- not a "
+             "validated improvement.",
+    )
+    if apply_star_player:
+        star_boost_scale = st.slider(
+            "Star boost scale (Elo points per goal+assist by the leading scorer)", 0.0, 40.0,
+            DEFAULT_STAR_BOOST_SCALE, 2.0,
+        )
+    apply_altitude_tz = st.toggle(
+        "Factor altitude/jet-lag into win probability (experimental)",
+        value=False,
+        help="Uses each team's real FIFA-published 2026 base camp vs. the match venue's real "
+             "elevation/timezone. Disclosed heuristic, not statistically validated.",
+    )
+    altitude_scale, tz_scale = DEFAULT_ALTITUDE_SCALE, DEFAULT_TZ_SCALE
+    if apply_altitude_tz:
+        altitude_scale = st.slider("Altitude scale (Elo points per 1000m gained)", 0.0, 100.0, DEFAULT_ALTITUDE_SCALE, 5.0)
+        tz_scale = st.slider("Timezone scale (Elo points per hour crossed)", 0.0, 30.0, DEFAULT_TZ_SCALE, 1.0)
+
+    st.caption("Host-nation advantage (Elo points) -- same disclosed judgment call as the other boards.")
+    usa_host_bonus = st.slider("USA host advantage", 0.0, 200.0, DEFAULT_HOST_BONUS_BY_COUNTRY["United States"], 10.0)
+    mexico_host_bonus = st.slider("Mexico host advantage", 0.0, 200.0, DEFAULT_HOST_BONUS_BY_COUNTRY["Mexico"], 10.0)
+    canada_host_bonus = st.slider("Canada host advantage", 0.0, 200.0, DEFAULT_HOST_BONUS_BY_COUNTRY["Canada"], 10.0)
+    host_bonus_by_country = {"United States": usa_host_bonus, "Mexico": mexico_host_bonus, "Canada": canada_host_bonus}
+
     st.header("Position sizing")
     bankroll = st.number_input("Bankroll ($)", min_value=0.0, value=1000.0, step=100.0)
     kelly_fraction_pct = st.slider("Kelly fraction", min_value=0.05, max_value=1.0, value=0.25, step=0.05)
@@ -79,7 +134,22 @@ def load_kalshi_markets():
     return get_match_markets()
 
 
+@st.cache_data(ttl=300, show_spinner="Pulling upcoming fixture venues...")
+def load_upcoming_fixtures():
+    """Keyed by frozenset({team_a, team_b}) -> {date, venue_city, stage}."""
+    return {frozenset({r["home_team"], r["away_team"]}): r for r in fetch_upcoming()}
+
+
+@st.cache_data(ttl=1800, show_spinner="Checking ESPN match events for cards/injuries...")
+def load_auto_injury_report():
+    return build_live_report()
+
+
 matches = load_kalshi_markets()
+need_adjustment_data = apply_player_impact or apply_star_player or apply_altitude_tz
+upcoming = load_upcoming_fixtures() if need_adjustment_data else {}
+auto_cards, auto_injuries, auto_goals = load_auto_injury_report() if need_adjustment_data else (None, None, None)
+apply_any_adjustment = need_adjustment_data and not use_efficiency
 
 if not matches:
     st.info("No open World Cup match markets found on Kalshi right now.")
@@ -103,8 +173,53 @@ else:
             home_off, home_def = latest_efficiency.get(name_a, (league_avg_goals, league_avg_goals))
             away_off, away_def = latest_efficiency.get(name_b, (league_avg_goals, league_avg_goals))
             sim = simulate_match_efficiency(home_off, home_def, away_off, away_def, league_avg_goals, n_sims=10000)
+            adjustment_detail = []
         else:
-            diff = effective_diff(engine, name_a, name_b)
+            diff = effective_diff(engine, name_a, name_b, host_bonus_by_country=host_bonus_by_country)
+            adjustment_detail = []
+
+            if apply_any_adjustment:
+                fixture = upcoming.get(frozenset({name_a, name_b}))
+                adj_a, adj_b = 0.0, 0.0
+
+                if apply_player_impact and fixture and fixture.get("stage"):
+                    for team_name, sign in ((name_a, 1), (name_b, -1)):
+                        team_adj, detail = elo_adjustment_for_team(
+                            team_name, auto_goals, auto_cards, auto_injuries, fixture["stage"],
+                            impact_scale=impact_scale,
+                        )
+                        if sign > 0:
+                            adj_a += team_adj
+                        else:
+                            adj_b += team_adj
+                        if team_adj != 0:
+                            adjustment_detail.extend(detail)
+
+                if apply_star_player:
+                    for team_name, sign in ((name_a, 1), (name_b, -1)):
+                        team_adj, detail = star_player_boost_for_team(team_name, auto_goals, boost_scale=star_boost_scale)
+                        if sign > 0:
+                            adj_a += team_adj
+                        else:
+                            adj_b += team_adj
+                        if team_adj != 0:
+                            adjustment_detail.extend(detail)
+
+                if apply_altitude_tz and fixture:
+                    for team_name, sign in ((name_a, 1), (name_b, -1)):
+                        alt_delta, tz_delta = base_camp_altitude_tz_delta(team_name, fixture["date"], fixture["venue_city"])
+                        team_adj = altitude_tz_elo_adjustment(alt_delta, tz_delta, altitude_scale, tz_scale)
+                        if sign > 0:
+                            adj_a += team_adj
+                        else:
+                            adj_b += team_adj
+                        if team_adj != 0:
+                            adjustment_detail.append(
+                                f"{team_name} altitude/jet-lag: {team_adj:+.0f} Elo (altitude change {alt_delta}m, tz change {tz_delta}h)"
+                            )
+
+                diff = diff + (adj_a - adj_b)
+
             sim = simulate_match(goal_model, diff, n_sims=10000)
 
         top_score = sim["top_scorelines"][0]
@@ -119,7 +234,7 @@ else:
             stake = fractional_kelly_stake(p_advance, price, bankroll, fraction=kelly_fraction_pct, max_stake_pct=max_stake_pct)
             ev_dollar = stake * ev_per_dollar(p_advance, price)
             profit_if_hit = stake * (1 / price - 1) if price > 0 else 0.0
-            rows.append({
+            row = {
                 "Match": m["title"],
                 "Team": team["team"],
                 "P(advances)": round(p_advance, 3),
@@ -131,8 +246,11 @@ else:
                 "Expected goals": f"{sim['home_expected_goals']:.2f} - {sim['away_expected_goals']:.2f}",
                 "Most likely score": top_score["score"],
                 "Score prob.": round(top_score["probability"], 3),
-                "Bet on this?": False,
-            })
+            }
+            if apply_any_adjustment:
+                row["Adjustments applied"] = "; ".join(adjustment_detail) if adjustment_detail else "no confirmed adjustment"
+            row["Bet on this?"] = False
+            rows.append(row)
 
     df = pd.DataFrame(rows).sort_values("Edge (pts)", ascending=False).reset_index(drop=True)
     edited_df = st.data_editor(
@@ -160,28 +278,31 @@ else:
     st.divider()
     st.subheader("Deep dive: uncertainty for one match")
     st.caption(
-        "10,000 BOOTSTRAP refits (not the same as the goal simulation above) -- resamples the "
+        "2,000 BOOTSTRAP refits (not the same as the goal simulation above) -- resamples the "
         "historical training data itself to show how much the win-probability estimate would "
-        "wobble given a small (~142 match) training set. Takes ~60-90 seconds, so it's one "
-        "match at a time rather than automatic for all of them."
+        "wobble given a finite training set (now ~24,500 competitive matches, up from the old "
+        "~142 WC-knockout-only set -- see the main Kalshi page for why). Takes ~60-90 seconds, "
+        "so it's one match at a time rather than automatic for all of them; n_boot is 2,000 "
+        "rather than 10,000 because each refit is now far more expensive on the bigger training "
+        "set (still a standard, well-justified bootstrap replicate count)."
     )
     match_titles = [m["title"] for m in matches]
     selected_title = st.selectbox("Pick a match", match_titles)
     selected = next(m for m in matches if m["title"] == selected_title)
     sel_a, sel_b = selected["teams"]
 
-    @st.cache_data(show_spinner="Bootstrapping 10,000 model refits (~60-90 seconds, cached after first run)...")
+    @st.cache_data(show_spinner="Bootstrapping 2,000 model refits (~60-90 seconds, cached after first run)...")
     def cached_bootstrap(sim_diff: float, sim_h2h: float):
-        point, boot_samples = bootstrap_win_probability(feature_rows_full, [sim_diff, sim_h2h], n_boot=10000)
+        point, boot_samples = bootstrap_win_probability(feature_rows_full, [sim_diff, sim_h2h], n_boot=2000)
         return summarize_bootstrap(point, boot_samples)
 
-    if st.button("Run 10,000-refit uncertainty check"):
+    if st.button("Run 2,000-refit uncertainty check"):
         sim_diff = effective_diff(engine, sel_a["team"], sel_b["team"])
         sim_h2h = h2h_diff_live(engine, sel_a["team"], sel_b["team"])
         boot_stats = cached_bootstrap(sim_diff, sim_h2h)
         st.metric(f"{sel_a['team']} advances", f"{boot_stats['point_estimate']:.1%}")
         st.write(
-            f"90% confidence interval from 10,000 bootstrap refits: "
+            f"90% confidence interval from 2,000 bootstrap refits: "
             f"**[{boot_stats['ci_low']:.1%}, {boot_stats['ci_high']:.1%}]** (std={boot_stats['std']:.3f})"
         )
 
