@@ -9,7 +9,7 @@ from src.models.winprob_link import win_probability, h2h_diff_live
 from src.ingest.oddspapi_client import get_betmgm_moneyline_matches
 from src.ingest.upcoming_fixtures import fetch_upcoming
 from src.features.auto_injury_report import build_live_report, team_auto_flags
-from src.features.player_impact import elo_adjustment_for_team, DEFAULT_IMPACT_SCALE
+from src.features.player_impact import elo_adjustment_for_team, DEFAULT_IMPACT_SCALE, star_player_boost_for_team, DEFAULT_STAR_BOOST_SCALE
 from src.features.altitude_timezone import (
     base_camp_altitude_tz_delta, altitude_tz_elo_adjustment,
     DEFAULT_ALTITUDE_SCALE, DEFAULT_TZ_SCALE,
@@ -76,7 +76,7 @@ st.caption(
     "margin proportionally, shown only as a read on BetMGM's true belief for comparison."
 )
 
-engine, model, n_train, tracker, _alt_tz_tracker = load_engine_and_model()
+engine, model, n_train, tracker, _alt_tz_tracker, _feature_rows_full = load_engine_and_model()
 st.caption(f"Elo engine trained on full match history; win-probability link fit on {n_train} historical World Cup knockout matches with a decisive result.")
 st.caption(
     "'Altitude change' / 'Timezone change' use each team's REAL FIFA-published 2026 base "
@@ -98,6 +98,18 @@ with st.sidebar:
     impact_scale = DEFAULT_IMPACT_SCALE
     if apply_player_impact:
         impact_scale = st.slider("Impact scale (Elo points for 100% of output missing)", 0.0, 400.0, DEFAULT_IMPACT_SCALE, 10.0)
+
+    apply_star_player = st.toggle(
+        "Factor star-player boost into win probability (experimental)",
+        value=False,
+        help="Same heuristic as the Kalshi board: POSITIVE adjustment for a team's leading "
+             "scorer's real goal+assist count this tournament. Backtested with a StatsBomb "
+             "proxy on 2018+2022: INCONCLUSIVE (Brier 0.236 with it vs 0.233 without, n=97) -- "
+             "not a validated improvement, off by default.",
+    )
+    star_boost_scale = DEFAULT_STAR_BOOST_SCALE
+    if apply_star_player:
+        star_boost_scale = st.slider("Star boost scale (Elo points per goal+assist)", 0.0, 40.0, DEFAULT_STAR_BOOST_SCALE, 2.0)
 
     apply_altitude_tz = st.toggle(
         "Factor altitude/jet-lag into win probability (experimental)",
@@ -133,7 +145,7 @@ with st.sidebar:
 
 matches = load_betmgm_matches()
 upcoming = load_upcoming_fixtures()
-auto_cards, auto_injuries, auto_goals = load_auto_injury_report() if apply_player_impact else (None, None, None)
+auto_cards, auto_injuries, auto_goals = load_auto_injury_report() if (apply_player_impact or apply_star_player) else (None, None, None)
 
 if not matches:
     st.warning("No BetMGM World Cup knockout moneyline matches found right now.")
@@ -162,7 +174,12 @@ else:
                 )
                 impact[team] = (adj, detail)
 
-        apply_any_adjustment = apply_player_impact or apply_altitude_tz
+        star = {}
+        if apply_star_player:
+            for team in (team_a["team"], team_b["team"]):
+                star[team] = star_player_boost_for_team(team, auto_goals, boost_scale=star_boost_scale)
+
+        apply_any_adjustment = apply_player_impact or apply_altitude_tz or apply_star_player
 
         for team, model_prob, fair_prob in ((team_a, model_prob_a, fair_a), (team_b, model_prob_b, fair_b)):
             raw_price = implied_prob(team["decimal_odds"])
@@ -191,6 +208,13 @@ else:
                         adjustment_detail.append(
                             f"altitude/jet-lag: {own_altitude_adj:+.0f} Elo (altitude change {own_alt}m, tz change {own_tz}h)"
                         )
+
+                if apply_star_player:
+                    own_star_adj, own_star_detail = star.get(team["team"], (0.0, []))
+                    opp_star_adj, _ = star.get(opp_team, (0.0, []))
+                    own_total_adj += own_star_adj
+                    opp_total_adj += opp_star_adj
+                    adjustment_detail.extend(own_star_detail)
 
                 adjusted_diff = (diff if team is team_a else -diff) + (own_total_adj - opp_total_adj)
                 adjusted_h2h = h2h_diff if team is team_a else -h2h_diff
