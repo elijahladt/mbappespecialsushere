@@ -84,22 +84,26 @@ def load_injury_notes():
 
 st.title("World Cup 2026 Edge Board — Kalshi")
 st.warning(
-    "**Small-sample validation only.** Walk-forward backtest on 2010-2022 knockout "
-    "matches (n=49) shows real skill vs. a naive 50/50 baseline (Brier 0.165, 95% CI "
-    "[0.120, 0.212] vs 0.25), but 49 matches is not enough to be confident in exact "
-    "edge sizes — especially the big ones (20+ points) below, which likely reflect the "
-    "model missing information the market has (injuries, current form, squad news), not "
-    "a real 20-point market mispricing. Use fractional Kelly, trust small edges more than huge ones. "
-    "Model now includes head-to-head record alongside Elo (added to address a real gap: Elo "
-    "assumes team strength is transitive and can't represent 'bogey team' matchups) -- on this "
-    "same 2010-2022 sample it's a statistical wash (0.165 with it vs. 0.159 without, well within "
-    "each other's confidence interval given only 49 matches), but see the live Kalshi comparison "
-    "further down the page for a more encouraging real-market result with it included.",
+    "**Small TEST sample -- but a much bigger TRAINING sample now.** The win-probability "
+    "link used to train on only ~142 WC knockout matches; it now trains on every decisive, "
+    "non-friendly international match in history (~24,500 matches -- qualifiers, continental "
+    "championships, Nations Leagues, etc., confirmed via walk-forward to genuinely help: "
+    "src/backtest/validate_expanded_training.py, Brier 0.1541 vs. the old 0.1648 on the same "
+    "held-out matches). The TEST sample is still just 2010-2022 WC knockout matches (n=49, "
+    "Brier 0.1541, 95% CI [0.114, 0.199] vs. naive 50/50's 0.25) -- that part hasn't changed and "
+    "still isn't enough to be confident in exact edge sizes, especially the big ones (20+ points) "
+    "below, which likely reflect the model missing information the market has (injuries, current "
+    "form, squad news), not a real 20-point market mispricing. Use fractional Kelly, trust small "
+    "edges more than huge ones. Model includes head-to-head record alongside Elo (added to "
+    "address a real gap: Elo assumes team strength is transitive and can't represent 'bogey team' "
+    "matchups) -- still a statistical wash even on the bigger training set (0.1541 with it vs. "
+    "0.1534 without), but see the live Kalshi comparison further down the page for a more "
+    "encouraging real-market result with it included.",
     icon="⚠️",
 )
 
 engine, model, n_train, tracker, _alt_tz_tracker, _feature_rows_full = load_engine_and_model()
-st.caption(f"Elo engine trained on full match history; win-probability link fit on {n_train} historical World Cup knockout matches with a decisive result.")
+st.caption(f"Elo engine trained on full match history; win-probability link fit on {n_train} historical competitive (non-friendly) matches with a decisive result -- see the warning above for why this changed from WC-knockout-only.")
 st.caption(
     "'Model prob (straight Elo)' does not depend on the live Kalshi price at all and is "
     "identical every reload unless the underlying match history changes. 'Edge' and "
@@ -389,9 +393,9 @@ else:
 
 st.divider()
 st.info(
-    "**10,000-simulation match statistics (win/draw/loss, most likely scoreline, bootstrap "
-    "confidence intervals) have moved to their own page: 'Match Simulator' in the sidebar** -- "
-    "now covers every open match automatically instead of one at a time.",
+    "**10,000-simulation match statistics (win/draw/loss, most likely scoreline) and the "
+    "bootstrap confidence-interval deep dive have moved to their own page: 'Match Simulator' "
+    "in the sidebar** -- now covers every open match automatically instead of one at a time.",
     icon="🎲",
 )
 
@@ -424,7 +428,8 @@ if validation:
         f"the confidence intervals overlap substantially at this sample size, so treat this as "
         f"inconclusive, not a proven win. (Note: this Elo baseline is refit on the same small "
         f"98-row sample for a fair comparison -- it is NOT the same as the production Elo model "
-        f"above, which trains on 143 matches across 1986-2022 and backtests at Brier 0.159.)"
+        f"above, which trains on ~24,500 competitive matches across all history and backtests "
+        f"at Brier 0.1541.)"
     )
 
 match_labels = [f"{r.date} — {r.home_team} vs {r.away_team}" for r in xg_df.itertuples()]

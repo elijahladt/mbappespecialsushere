@@ -79,13 +79,15 @@ def effective_diff(engine, team_a, team_b, host_bonus_by_country: dict = None):
 def full_feature_vector(engine, team_a, team_b, host_bonus_by_country: dict = None):
     """[elo_diff (with host-nation bonus), h2h_diff] -- the model now takes
     both. NOTE on confidence: walk-forward backtest on the tiny WC knockout
-    sample (n=49 held-out matches across 2010-2022) found h2h_diff's effect
-    is within noise (Brier 0.1648 with it vs. 0.1591 without -- confidence
-    intervals almost fully overlap), unlike tennis/club football where much
-    larger samples let us confidently say a feature did or didn't help.
-    Kept in the model because the underlying rationale (Elo can't represent
-    "bogey team" matchups) is sound and the result isn't a clear negative,
-    but this is a genuinely unresolved question, not a validated win."""
+    TEST sample (n=49 held-out matches across 2010-2022 -- unchanged even
+    after the training set was expanded to ~24,500 competitive matches, see
+    src/models/winprob_link.py) found h2h_diff's effect is within noise
+    (Brier 0.1541 with it vs. 0.1534 without -- confidence intervals almost
+    fully overlap), unlike tennis/club football where much larger samples
+    let us confidently say a feature did or didn't help. Kept in the model
+    because the underlying rationale (Elo can't represent "bogey team"
+    matchups) is sound and the result isn't a clear negative, but this is a
+    genuinely unresolved question, not a validated win."""
     return [effective_diff(engine, team_a, team_b, host_bonus_by_country), h2h_diff_live(engine, team_a, team_b)]
 
 

@@ -1,14 +1,30 @@
-"""Elo-diff + head-to-head -> match-winner probability, fit on historical
-World Cup KNOCKOUT matches specifically (not group stage), since Kalshi's
-advance/winner markets settle to a definite winner after regulation/
-extra-time/penalties -- a different target than a 3-way 1X2 group-stage
-market.
+"""Elo-diff + head-to-head -> match-winner probability. PREDICTS on World Cup
+knockout matches specifically (Kalshi's advance/winner markets settle to a
+definite winner after regulation/extra-time/penalties -- a different target
+than a 3-way 1X2 group-stage market), but as of this revision it TRAINS on
+every decisive, non-friendly international match in history (~24,500 matches:
+qualifiers, continental championships, Nations Leagues, the World Cup itself,
+etc.), not just the ~142 WC knockout matches.
+
+That change was tested, not assumed: this project's real bottleneck has
+consistently been the tiny WC-knockout-only training set (most added
+features tested inconclusive/negative on it, plausibly because there's
+barely enough data to fit two coefficients reliably, let alone more).
+src/backtest/validate_expanded_training.py walk-forward compares this
+approach against the old WC-knockout-only training set on the exact same
+held-out 2010/2014/2018/2022 WC knockout test matches: pooled Brier 0.1541
+vs. 0.1648 (naive 50/50 = 0.25) -- a genuine, if modest, win (beats the old
+approach in 3 of 4 tested years), not just "more data because more sounds
+better." "Competitive" means literally tournament != "Friendly" -- confirmed
+directly against the database that this is the only friendly label (no other
+spellings, no NULLs), so it's an unambiguous filter, not a judgment call
+about which cups "count."
 
 Known data limitation: the historical results dataset records only the final
-score, not whether a draw was decided by a penalty shootout, so drawn knockout
-matches (shootout-decided) are excluded from the training set below -- we
-simply don't know who advanced in those rows. See the shootout_adjustment()
-heuristic for how that gap is handled at prediction time instead.
+score, not whether a draw was decided by a penalty shootout, so drawn
+matches are excluded from the training set below -- we simply don't know who
+advanced/won in those rows. See the shootout_adjustment() heuristic for how
+that gap is handled at prediction time instead.
 
 h2h_diff (head-to-head win-count difference between these two specific
 teams) was added after a discussion about tactical/matchup effects a pure
@@ -51,6 +67,14 @@ def is_knockout(date: str, tournament: str) -> bool:
     return start is not None and date >= start
 
 
+def is_competitive(tournament: str) -> bool:
+    """Everything that isn't literally a friendly. Used for TRAINING-set
+    selection (see build_training_set() below) -- is_knockout() above stays
+    as-is and keeps its separate job of picking which matches to PREDICT on
+    (backtests use it to select the held-out WC knockout test rows)."""
+    return tournament != "Friendly"
+
+
 def effective_elo_diff(row) -> float:
     adv = 0.0 if row["neutral"] else HOME_ADVANTAGE
     return (row["home_elo_pre"] + adv) - row["away_elo_pre"]
@@ -61,12 +85,34 @@ def build_features(row):
 
 
 def build_training_set(feature_rows):
+    """Every decisive, non-friendly match in history -- see module docstring
+    for why this replaced the old WC-knockout-only training set (validated
+    win, src/backtest/validate_expanded_training.py). Shootout-decided draws
+    are still excluded across the board, not just for the World Cup: we only
+    know the final score, not whether extra-time/penalties happened, for any
+    competition in this dataset."""
+    X, y = [], []
+    for row in feature_rows:
+        if not is_competitive(row["tournament"]):
+            continue
+        if row["home_score"] == row["away_score"]:
+            continue
+        X.append(build_features(row))
+        y.append(1 if row["home_score"] > row["away_score"] else 0)
+    return np.array(X), np.array(y)
+
+
+def build_knockout_only_training_set(feature_rows):
+    """The OLD (pre-expansion) training set: WC knockout matches only.
+    Kept only as the comparison baseline in
+    src/backtest/validate_expanded_training.py -- no longer used by
+    fit_link() itself."""
     X, y = [], []
     for row in feature_rows:
         if not is_knockout(row["date"], row["tournament"]):
             continue
         if row["home_score"] == row["away_score"]:
-            continue  # shootout-decided; excluded, see module docstring
+            continue
         X.append(build_features(row))
         y.append(1 if row["home_score"] > row["away_score"] else 0)
     return np.array(X), np.array(y)
@@ -113,7 +159,7 @@ def shootout_adjustment(p: float, band: float = 0.10, shrink: float = 0.15) -> f
 
 if __name__ == "__main__":
     model, n = fit_link()
-    print(f"Fit on {n} historical WC knockout matches with a decisive result.")
+    print(f"Fit on {n} historical competitive (non-friendly) matches with a decisive result.")
     print(f"Coefficients (elo_diff, h2h_diff): {model.coef_[0]}, intercept: {model.intercept_[0]:.4f}")
     for diff in (-300, -150, -50, 0, 50, 150, 300):
         print(f"  eff_elo_diff={diff:+5d}, h2h_diff=0 -> P(home wins tie) = {win_probability(model, [diff, 0]):.3f}")
